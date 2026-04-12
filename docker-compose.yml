@@ -1,0 +1,49 @@
+services:
+  # PostgreSQL + pgvector
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ipc_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ipc_rag
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ipc_rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Streamlit app
+  app:
+    build: .
+    container_name: ipc_app
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ipc_rag
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      LLM_PROVIDER: gemini
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: gemini-2.5-flash
+    volumes:
+      - model_cache:/root/.cache
+      # Mount ổ đĩa để đọc file PDF qua đường dẫn Windows
+      - C:/:/data/local/C:ro
+      - D:/:/data/local/D:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  model_cache:
