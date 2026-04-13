@@ -1,7 +1,7 @@
 import streamlit as st
 
 from core.generator import PROVIDERS
-from core.vectorstore import save_api_key, get_api_key
+from core.vectorstore import save_api_key, get_api_key, delete_api_key
 
 st.set_page_config(
     page_title="IPC - Cài đặt",
@@ -44,29 +44,49 @@ for p in PROVIDERS:
 
 st.divider()
 
-# --- Cohere (Embedding) ---
+# --- Cohere Keys (Embedding - multi-key) ---
 st.header("Cohere (Embedding)")
-st.info("**Bắt buộc** - dùng để chuyển văn bản thành vector cho tìm kiếm.")
+st.info("**Bắt buộc** - thêm nhiều key để xoay vòng khi hết quota. Mỗi key free 1000 req/tháng.")
 
-col1, col2 = st.columns([3, 1])
-saved_cohere = get_api_key("cohere")
-with col1:
-    cohere_input = st.text_input(
-        "COHERE",
-        type="password",
-        value=saved_cohere,
-        key="key_cohere",
-    )
-with col2:
-    st.caption("[Lấy key](https://dashboard.cohere.com/api-keys)")
-    if saved_cohere:
-        st.success("Đã lưu", icon="✅")
+MAX_COHERE_KEYS = 5
 
-if cohere_input and cohere_input != saved_cohere:
-    if len(cohere_input) > 20:
-        save_api_key("cohere", cohere_input)
-        st.success("Cohere key đã lưu!")
-        st.rerun()
+# Load existing keys
+cohere_keys = []
+for i in range(1, MAX_COHERE_KEYS + 1):
+    key_name = f"cohere_{i}"
+    k = get_api_key(key_name)
+    if k:
+        cohere_keys.append((key_name, k))
+
+# Display existing keys
+if cohere_keys:
+    st.caption(f"{len(cohere_keys)} key(s) đã lưu - tự động xoay vòng")
+    for key_name, key_val in cohere_keys:
+        col1, col2 = st.columns([4, 1])
+        col1.text(f"{key_name}: {key_val[:8]}...{key_val[-4:]}")
+        if col2.button("Xóa", key=f"del_{key_name}"):
+            delete_api_key(key_name)
+            st.rerun()
+
+# Add new key
+st.caption("[Lấy key tại dashboard.cohere.com/api-keys](https://dashboard.cohere.com/api-keys)")
+new_cohere = st.text_input(
+    "Thêm Cohere key mới",
+    type="password",
+    placeholder="Dán key tại đây...",
+    key="new_cohere_key",
+)
+if new_cohere and st.button("Lưu key"):
+    if len(new_cohere) > 20:
+        next_idx = len(cohere_keys) + 1
+        if next_idx <= MAX_COHERE_KEYS:
+            save_api_key(f"cohere_{next_idx}", new_cohere)
+            st.success(f"Cohere key {next_idx} đã lưu!")
+            st.rerun()
+        else:
+            st.error(f"Tối đa {MAX_COHERE_KEYS} keys.")
+    else:
+        st.error("Key không hợp lệ.")
 
 st.divider()
 
@@ -78,7 +98,8 @@ for p in PROVIDERS:
     status = "✅ Sẵn sàng" if k else "❌ Chưa có"
     all_providers.append({"Provider": p["name"].upper(), "Vai trò": "LLM Generation", "Trạng thái": status})
 
-cohere_status = "✅ Sẵn sàng" if get_api_key("cohere") else "❌ Chưa có (bắt buộc)"
+cohere_count = len(cohere_keys)
+cohere_status = f"✅ {cohere_count} key(s)" if cohere_count > 0 else "❌ Chưa có (bắt buộc)"
 all_providers.append({"Provider": "COHERE", "Vai trò": "Embedding", "Trạng thái": cohere_status})
 
 st.table(all_providers)

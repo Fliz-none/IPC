@@ -1,7 +1,6 @@
 """Embedding via Cohere API with multi-key rotation on rate limits."""
 
 import time
-import os
 
 import cohere
 
@@ -11,32 +10,33 @@ EMBEDDING_MODEL = "embed-multilingual-v3.0"
 
 
 def _load_all_cohere_keys() -> list[str]:
-    """Load all Cohere keys: COHERE_API_KEY, COHERE_API_KEY_2, COHERE_API_KEY_3, ..."""
+    """Load all Cohere keys from DB (saved via Settings UI)."""
     keys = []
-    # From Streamlit secrets
     try:
-        import streamlit as st
-        if hasattr(st, "secrets"):
-            for k, v in st.secrets.items():
-                if k.startswith("COHERE_API_KEY") and v:
-                    keys.append(v)
+        from core.vectorstore import get_api_key
+        for i in range(1, 6):
+            key = get_api_key(f"cohere_{i}")
+            if key:
+                keys.append(key)
     except Exception:
         pass
-    # From env vars (fallback / Docker)
+    # Fallback: Streamlit secrets
     if not keys:
+        try:
+            import streamlit as st
+            if hasattr(st, "secrets"):
+                for k, v in st.secrets.items():
+                    if k.startswith("COHERE_API_KEY") and v:
+                        keys.append(v)
+        except Exception:
+            pass
+    # Fallback: env vars
+    if not keys:
+        import os
         for suffix in ["", "_2", "_3", "_4", "_5"]:
             key = os.environ.get(f"COHERE_API_KEY{suffix}", "")
             if key:
                 keys.append(key)
-    # From DB (saved via Settings page)
-    if not keys:
-        try:
-            from core.vectorstore import get_api_key
-            key = get_api_key("cohere")
-            if key:
-                keys.append(key)
-        except Exception:
-            pass
     return keys
 
 
@@ -54,8 +54,15 @@ def _get_clients(extra_key: str = "") -> list:
     return _clients
 
 
+def reset_clients():
+    """Reset clients to reload keys from DB."""
+    global _clients, _current_key_idx
+    _clients = []
+    _current_key_idx = 0
+
+
 def _embed_with_rotation(texts: list[str], input_type: str, extra_key: str = "") -> list:
-    """Embed with auto-rotation across multiple Cohere keys on rate limit."""
+    """Embed with auto-rotation across multiple Cohere keys."""
     global _current_key_idx
     clients = _get_clients(extra_key)
 
@@ -76,10 +83,8 @@ def _embed_with_rotation(texts: list[str], input_type: str, extra_key: str = "")
         except Exception as e:
             err = str(e).lower()
             if "429" in str(e) or "rate" in err or "quota" in err or "limit" in err:
-                # Switch to next key
                 _current_key_idx += 1
                 if _current_key_idx % len(clients) == 0:
-                    # All keys exhausted this round, wait before retry
                     time.sleep(5)
                 tried += 1
             else:
@@ -89,7 +94,6 @@ def _embed_with_rotation(texts: list[str], input_type: str, extra_key: str = "")
 
 
 def embed_documents(texts: list[str], api_key: str = "") -> dict:
-    """Embed document passages with multi-key rotation."""
     all_embeddings = []
     for i in range(0, len(texts), EMBED_BATCH_SIZE):
         batch = texts[i:i + EMBED_BATCH_SIZE]
