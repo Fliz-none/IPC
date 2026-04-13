@@ -40,16 +40,26 @@ def _get_conn():
     return _conn
 
 
-def _file_hash(filename: str) -> str:
-    return hashlib.md5(filename.encode()).hexdigest()[:16]
+def _file_hash(filepath: str) -> str:
+    """Hash file content (first 64KB + size) for reliable dedup."""
+    h = hashlib.md5()
+    try:
+        import os
+        size = os.path.getsize(filepath)
+        h.update(str(size).encode())
+        with open(filepath, "rb") as f:
+            h.update(f.read(65536))
+    except Exception:
+        h.update(filepath.encode())
+    return h.hexdigest()[:16]
 
 
 # --- Documents ---
 
-def create_document(source_file: str, chunk_count: int) -> int:
+def create_document(source_file: str, chunk_count: int, filepath: str = "") -> int:
     """Create document, delete old chunks for fresh ingest."""
     conn = _get_conn()
-    fhash = _file_hash(source_file)
+    fhash = _file_hash(filepath or source_file)
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -68,13 +78,13 @@ def create_document(source_file: str, chunk_count: int) -> int:
     return doc_id
 
 
-def get_or_create_document(source_file: str, chunk_count: int) -> tuple[int, int]:
+def get_or_create_document(source_file: str, chunk_count: int, filepath: str = "") -> tuple[int, int]:
     """Get existing document or create new. Returns (doc_id, existing_chunk_count).
 
     Does NOT delete existing chunks - used for resume.
     """
     conn = _get_conn()
-    fhash = _file_hash(source_file)
+    fhash = _file_hash(filepath or source_file)
     with conn.cursor() as cur:
         cur.execute(
             "SELECT id FROM documents WHERE file_hash = %s", (fhash,)

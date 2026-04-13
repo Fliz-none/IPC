@@ -31,7 +31,7 @@ def ingest_pdf(pdf_path: str, filename: str, progress_callback=None, cohere_key:
         progress_callback("chunk", 1, 1)
 
     # Check if document exists and has partial data
-    doc_id, existing_count = get_or_create_document(filename, total_chunks)
+    doc_id, existing_count = get_or_create_document(filename, total_chunks, filepath=pdf_path)
 
     if existing_count >= total_chunks:
         # Already fully ingested
