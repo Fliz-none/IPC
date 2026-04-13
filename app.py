@@ -226,7 +226,10 @@ with st.sidebar:
         st.info("Chưa có tài liệu nào.")
     for doc in docs:
         col1, col2 = st.columns([3, 1])
-        col1.text(f"{doc['name'][:30]} ({doc['chunks']} chunks)")
+        actual = doc['chunks']
+        total = doc.get('total', actual)
+        status = f"{actual}/{total}" if actual < total else str(actual)
+        col1.text(f"{doc['name'][:25]} ({status} chunks)")
         if col2.button("Xóa", key=f"del_{doc['hash']}"):
             remove_document(doc["hash"])
             st.rerun()

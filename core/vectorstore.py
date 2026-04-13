@@ -235,12 +235,23 @@ def hybrid_search(
 def list_documents() -> list[dict]:
     conn = _get_conn()
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT filename, file_hash, chunk_count, created_at FROM documents ORDER BY created_at DESC"
-        )
+        cur.execute("""
+            SELECT d.filename, d.file_hash, d.chunk_count,
+                   COUNT(c.id) AS actual_chunks, d.created_at
+            FROM documents d
+            LEFT JOIN chunks c ON c.document_id = d.id
+            GROUP BY d.id
+            ORDER BY d.created_at DESC
+        """)
         rows = cur.fetchall()
     return [
-        {"name": r[0], "hash": r[1], "chunks": r[2], "created_at": str(r[3])}
+        {
+            "name": r[0],
+            "hash": r[1],
+            "total": r[2],
+            "chunks": r[3],
+            "created_at": str(r[4]),
+        }
         for r in rows
     ]
 
