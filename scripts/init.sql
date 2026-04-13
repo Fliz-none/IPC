@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     page_number INTEGER NOT NULL,
     child_text TEXT NOT NULL,
     parent_text TEXT NOT NULL,
-    embedding vector(768),
+    embedding vector(1024),
     ts_content tsvector,
     created_at TIMESTAMP DEFAULT NOW()
 );

@@ -11,7 +11,7 @@ from core.generator import generate_answer_stream
 INGEST_BATCH_SIZE = 64
 
 
-def ingest_pdf(pdf_path: str, filename: str, progress_callback=None, gemini_key: str = "") -> int:
+def ingest_pdf(pdf_path: str, filename: str, progress_callback=None, cohere_key: str = "") -> int:
     if progress_callback:
         progress_callback("extract", 0, 1)
 
@@ -39,7 +39,7 @@ def ingest_pdf(pdf_path: str, filename: str, progress_callback=None, gemini_key:
         batch_parents = [c["parent_text"] for c in batch]
         batch_metas = [c["metadata"] for c in batch]
 
-        batch_embeddings = embed_batch(batch_texts, api_key=gemini_key)
+        batch_embeddings = embed_batch(batch_texts, api_key=cohere_key)
         insert_chunks_batch(doc_id, batch_texts, batch_embeddings, batch_metas, batch_parents)
 
         if progress_callback:
@@ -59,10 +59,9 @@ def ask_stream(
 ):
     """Streaming Q&A with auto-fallback."""
     keys = keys or {}
-    gemini_key = keys.get("gemini", "")
     cohere_key = keys.get("cohere", "")
 
-    chunks = retrieve(query, gemini_key=gemini_key, cohere_key=cohere_key)
+    chunks = retrieve(query, cohere_key=cohere_key)
     if not chunks:
         def empty():
             yield "Không tìm thấy thông tin liên quan trong tài liệu."

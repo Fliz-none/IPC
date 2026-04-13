@@ -31,9 +31,9 @@ PARENT_CHUNK_SIZE = 1024
 PARENT_CHUNK_OVERLAP = 100
 CHUNK_SEPARATORS = ["\n\n", "\n", ". ", " ", ""]
 
-# Embedding - Gemini embedding (768-dim truncated)
-EMBEDDING_MODEL = "gemini-embedding-001"
-DENSE_VECTOR_SIZE = 768
+# Embedding - Cohere embed-multilingual-v3.0 (1024-dim)
+EMBEDDING_MODEL = "embed-multilingual-v3.0"
+DENSE_VECTOR_SIZE = 1024
 
 # Retrieval
 TOP_K = 20

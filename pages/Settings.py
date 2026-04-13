@@ -44,9 +44,9 @@ for p in PROVIDERS:
 
 st.divider()
 
-# --- Cohere Rerank ---
-st.header("Reranking (Tùy chọn)")
-st.info("Cohere Rerank tăng độ chính xác ~5%. App vẫn hoạt động tốt nếu không có.")
+# --- Cohere (Embedding) ---
+st.header("Cohere (Embedding)")
+st.info("**Bắt buộc** - dùng để chuyển văn bản thành vector cho tìm kiếm.")
 
 col1, col2 = st.columns([3, 1])
 saved_cohere = get_api_key("cohere")
@@ -78,7 +78,7 @@ for p in PROVIDERS:
     status = "✅ Sẵn sàng" if k else "❌ Chưa có"
     all_providers.append({"Provider": p["name"].upper(), "Vai trò": "LLM Generation", "Trạng thái": status})
 
-cohere_status = "✅ Sẵn sàng" if get_api_key("cohere") else "❌ Chưa có (tùy chọn)"
-all_providers.append({"Provider": "COHERE", "Vai trò": "Reranking", "Trạng thái": cohere_status})
+cohere_status = "✅ Sẵn sàng" if get_api_key("cohere") else "❌ Chưa có (bắt buộc)"
+all_providers.append({"Provider": "COHERE", "Vai trò": "Embedding", "Trạng thái": cohere_status})
 
 st.table(all_providers)

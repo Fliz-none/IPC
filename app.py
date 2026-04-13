@@ -57,8 +57,11 @@ with st.sidebar:
     # Provider & Model
     st.header("LLM")
 
-    if active_count == 0:
-        st.warning("Chưa có API key. Vào trang **Settings** để thêm.")
+    has_cohere = "cohere" in all_keys
+    if not has_cohere:
+        st.error("Thiếu **Cohere** key (embedding). Vào **Settings** để thêm.")
+    elif active_count == 0:
+        st.warning("Cần thêm LLM key (Gemini/Groq/OpenRouter) trong **Settings**.")
     else:
         preferred = st.selectbox(
             "Provider",
@@ -138,7 +141,7 @@ with st.sidebar:
                 count = ingest_pdf(
                     tmp_path, uploaded_file.name,
                     progress_callback=lambda s, c, t: on_progress(s, c, t, progress_bar, status_text),
-                    gemini_key=all_keys.get("gemini", ""),
+                    cohere_key=all_keys.get("cohere", ""),
                 )
                 progress_bar.progress(1.0)
                 status_text.empty()
@@ -204,7 +207,7 @@ with st.sidebar:
                     count = ingest_pdf(
                         tmp_path, filename,
                         progress_callback=lambda s, c, t: on_progress(s, c, t, progress_bar, status_text),
-                        gemini_key=all_keys.get("gemini", ""),
+                        cohere_key=all_keys.get("cohere", ""),
                     )
                     progress_bar.progress(1.0)
                     status_text.empty()
