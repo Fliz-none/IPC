@@ -5,6 +5,6 @@ data/
 *.egg-info/
 dist/
 build/
-.streamlit/
+.streamlit/secrets.toml
 .claude/
 TODO.md
