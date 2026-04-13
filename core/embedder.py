@@ -1,6 +1,7 @@
-"""Embedding via Cohere API with multi-key rotation on rate limits."""
+"""Embedding via Cohere API - parallel across multiple keys for max speed."""
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import cohere
 
@@ -10,17 +11,16 @@ EMBEDDING_MODEL = "embed-multilingual-v3.0"
 
 
 def _load_all_cohere_keys() -> list[str]:
-    """Load all Cohere keys from DB (saved via Settings UI)."""
+    """Load all Cohere keys from DB, then Streamlit secrets, then env."""
     keys = []
     try:
         from core.vectorstore import get_api_key
-        for i in range(1, 6):
+        for i in range(1, 11):  # Support up to 10 keys
             key = get_api_key(f"cohere_{i}")
             if key:
                 keys.append(key)
     except Exception:
         pass
-    # Fallback: Streamlit secrets
     if not keys:
         try:
             import streamlit as st
@@ -30,7 +30,6 @@ def _load_all_cohere_keys() -> list[str]:
                         keys.append(v)
         except Exception:
             pass
-    # Fallback: env vars
     if not keys:
         import os
         for suffix in ["", "_2", "_3", "_4", "_5"]:
@@ -55,23 +54,14 @@ def _get_clients(extra_key: str = "") -> list:
 
 
 def reset_clients():
-    """Reset clients to reload keys from DB."""
     global _clients, _current_key_idx
     _clients = []
     _current_key_idx = 0
 
 
-def _embed_with_rotation(texts: list[str], input_type: str, extra_key: str = "") -> list:
-    """Embed with auto-rotation across multiple Cohere keys."""
-    global _current_key_idx
-    clients = _get_clients(extra_key)
-
-    if not clients:
-        raise RuntimeError("Chưa có Cohere API key. Vào Settings để thêm.")
-
-    tried = 0
-    while tried < len(clients) * MAX_RETRIES:
-        client = clients[_current_key_idx % len(clients)]
+def _embed_single(client, texts: list[str], input_type: str) -> list:
+    """Embed using a single client with retry."""
+    for attempt in range(MAX_RETRIES):
         try:
             response = client.embed(
                 texts=texts,
@@ -83,23 +73,84 @@ def _embed_with_rotation(texts: list[str], input_type: str, extra_key: str = "")
         except Exception as e:
             err = str(e).lower()
             if "429" in str(e) or "rate" in err or "quota" in err or "limit" in err:
-                _current_key_idx += 1
-                if _current_key_idx % len(clients) == 0:
-                    time.sleep(5)
-                tried += 1
+                time.sleep(2 ** attempt * 3)
             else:
                 raise e
+    return None  # All retries failed
+
+
+def _embed_with_rotation(texts: list[str], input_type: str, extra_key: str = "") -> list:
+    """Single batch embed with key rotation fallback."""
+    global _current_key_idx
+    clients = _get_clients(extra_key)
+
+    if not clients:
+        raise RuntimeError("Chưa có Cohere API key. Vào Settings để thêm.")
+
+    for _ in range(len(clients)):
+        client = clients[_current_key_idx % len(clients)]
+        result = _embed_single(client, texts, input_type)
+        if result is not None:
+            return result
+        _current_key_idx += 1
 
     raise RuntimeError("Tất cả Cohere keys đều hết quota. Thêm key mới trong Settings.")
 
 
 def embed_documents(texts: list[str], api_key: str = "") -> dict:
-    all_embeddings = []
+    """Embed documents - parallel across keys if multiple available."""
+    clients = _get_clients(api_key)
+
+    if not clients:
+        raise RuntimeError("Chưa có Cohere API key. Vào Settings để thêm.")
+
+    # Split texts into batches
+    batches = []
     for i in range(0, len(texts), EMBED_BATCH_SIZE):
-        batch = texts[i:i + EMBED_BATCH_SIZE]
-        embeddings = _embed_with_rotation(batch, "search_document", api_key)
-        all_embeddings.extend(embeddings)
-    return {"dense": all_embeddings}
+        batches.append(texts[i:i + EMBED_BATCH_SIZE])
+
+    num_keys = len(clients)
+
+    if num_keys == 1:
+        # Single key - sequential
+        all_embeddings = []
+        for batch in batches:
+            result = _embed_with_rotation(batch, "search_document", api_key)
+            all_embeddings.extend(result)
+        return {"dense": all_embeddings}
+
+    # Multiple keys - parallel: distribute batches across keys
+    all_embeddings = [None] * len(batches)
+
+    def process_batch(batch_idx: int, batch: list[str], client_idx: int):
+        client = clients[client_idx % num_keys]
+        result = _embed_single(client, batch, "search_document")
+        if result is None:
+            # Retry with next key
+            for fallback in range(num_keys):
+                alt_client = clients[(client_idx + fallback + 1) % num_keys]
+                result = _embed_single(alt_client, batch, "search_document")
+                if result is not None:
+                    break
+        return batch_idx, result
+
+    with ThreadPoolExecutor(max_workers=num_keys) as executor:
+        futures = []
+        for i, batch in enumerate(batches):
+            # Round-robin assign batches to keys
+            futures.append(executor.submit(process_batch, i, batch, i))
+
+        for future in as_completed(futures):
+            batch_idx, result = future.result()
+            if result is None:
+                raise RuntimeError(f"Batch {batch_idx} thất bại. Tất cả keys hết quota.")
+            all_embeddings[batch_idx] = result
+
+    # Flatten
+    flat = []
+    for batch_result in all_embeddings:
+        flat.extend(batch_result)
+    return {"dense": flat}
 
 
 def embed_batch(texts: list[str], api_key: str = "") -> list[list[float]]:

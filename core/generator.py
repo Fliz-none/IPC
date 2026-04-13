@@ -112,13 +112,11 @@ def generate_answer_stream(
     keys: dict = None,
     preferred_provider: str = "gemini",
     model: str = "",
+    user_style: str = "",
     **kwargs,
 ):
-    """Stream answer with auto-fallback across providers on quota errors.
-
-    keys: {"gemini": "AIza...", "groq": "gsk_...", "openrouter": "sk-or-..."}
-    """
-    messages = format_prompt(query, chunks)
+    """Stream answer with auto-fallback across providers on quota errors."""
+    messages = format_prompt(query, chunks, user_style=user_style)
     keys = keys or {}
 
     # Build ordered provider list: preferred first, then others
