@@ -5,15 +5,28 @@ import psycopg2
 from psycopg2.extras import execute_values
 from pgvector.psycopg2 import register_vector
 
-from config import DATABASE_URL
+import os
 
 _conn = None
+
+
+def _get_db_url():
+    """Get DATABASE_URL: Streamlit secrets > env var > default."""
+    try:
+        import streamlit as st
+        return st.secrets.get("DATABASE_URL", "")
+    except Exception:
+        pass
+    return os.getenv("DATABASE_URL", "")
 
 
 def _get_conn():
     global _conn
     if _conn is None or _conn.closed:
-        _conn = psycopg2.connect(DATABASE_URL)
+        db_url = _get_db_url()
+        if not db_url:
+            raise RuntimeError("DATABASE_URL chưa được cấu hình. Vui lòng kiểm tra Secrets hoặc .env")
+        _conn = psycopg2.connect(db_url)
         _conn.autocommit = True
         register_vector(_conn)
     return _conn
