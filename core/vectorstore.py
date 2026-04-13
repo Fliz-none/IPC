@@ -10,14 +10,18 @@ import os
 _conn = None
 
 
-def _get_db_url():
-    """Get DATABASE_URL: Streamlit secrets > env var > default."""
+def _get_db_url() -> str:
+    """Get DATABASE_URL from multiple sources."""
+    # 1. Streamlit secrets (Streamlit Cloud)
     try:
         import streamlit as st
-        return st.secrets.get("DATABASE_URL", "")
+        if hasattr(st, "secrets") and "DATABASE_URL" in st.secrets:
+            return st.secrets["DATABASE_URL"]
     except Exception:
         pass
-    return os.getenv("DATABASE_URL", "")
+    # 2. Environment variable (Docker / .env)
+    url = os.environ.get("DATABASE_URL", "")
+    return url
 
 
 def _get_conn():
@@ -25,7 +29,11 @@ def _get_conn():
     if _conn is None or _conn.closed:
         db_url = _get_db_url()
         if not db_url:
-            raise RuntimeError("DATABASE_URL chưa được cấu hình. Vui lòng kiểm tra Secrets hoặc .env")
+            raise RuntimeError(
+                "DATABASE_URL chưa được cấu hình.\n"
+                "- Streamlit Cloud: Settings > Secrets > thêm DATABASE_URL\n"
+                "- Docker/Local: tạo file .env với DATABASE_URL=..."
+            )
         _conn = psycopg2.connect(db_url)
         _conn.autocommit = True
         register_vector(_conn)

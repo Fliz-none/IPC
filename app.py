@@ -105,8 +105,6 @@ with st.sidebar:
     # Document management
     st.header("Tài liệu")
 
-    upload_mode = st.radio("Nguồn file", ["Upload", "Đường dẫn local"], horizontal=True)
-
     stage_labels = {
         "extract": "Đang trích xuất text từ PDF...",
         "chunk": "Đang chia nhỏ tài liệu...",
@@ -123,6 +121,8 @@ with st.sidebar:
             pct = 0.05 if stage == "extract" else 0.1 if stage == "chunk" else 1.0
             _text.text(label)
         _bar.progress(min(pct, 1.0))
+
+    upload_mode = st.radio("Nguồn file", ["Upload", "Google Drive / URL"], horizontal=True)
 
     if upload_mode == "Upload":
         uploaded_file = st.file_uploader("Tải lên PDF", type=["pdf"])
@@ -150,39 +150,72 @@ with st.sidebar:
             finally:
                 os.unlink(tmp_path)
     else:
-        local_path = st.text_input(
-            "Đường dẫn file PDF",
-            placeholder=r"C:\Users\lucif\Downloads\document.pdf",
+        url_input = st.text_input(
+            "Dán link PDF",
+            placeholder="https://drive.google.com/file/d/xxx/view hoặc link trực tiếp .pdf",
         )
-        if local_path and st.button("Xử lý tài liệu"):
-            resolved = local_path.strip().strip('"').strip("'")
-            if len(resolved) >= 2 and resolved[1] == ":":
-                drive_letter = resolved[0].upper()
-                rest = resolved[2:].replace("\\", "/")
-                resolved = f"/data/local/{drive_letter}{rest}"
+        if url_input and st.button("Tải & Xử lý"):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            status_text.text("Đang tải file từ URL...")
 
-            if not os.path.isfile(resolved):
-                st.error(f"File không tồn tại: {local_path}\n(Docker path: {resolved})")
-            elif not resolved.lower().endswith(".pdf"):
-                st.error("Chỉ hỗ trợ file PDF.")
-            else:
-                file_size_mb = os.path.getsize(resolved) / (1024 * 1024)
-                filename = os.path.basename(resolved)
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                try:
+            tmp_path = None
+            filename = "document.pdf"
+            try:
+                import gdown
+                import re
+                import requests
+
+                url = url_input.strip()
+
+                # Google Drive link
+                if "drive.google.com" in url:
+                    # Extract file ID from various Google Drive URL formats
+                    match = re.search(r'/d/([a-zA-Z0-9_-]+)', url)
+                    if not match:
+                        match = re.search(r'id=([a-zA-Z0-9_-]+)', url)
+                    if match:
+                        file_id = match.group(1)
+                        tmp_path = tempfile.mktemp(suffix=".pdf")
+                        gdown.download(id=file_id, output=tmp_path, quiet=True)
+                        filename = f"gdrive_{file_id[:8]}.pdf"
+                    else:
+                        st.error("Không tìm thấy file ID trong link Google Drive.")
+                        st.stop()
+                # Direct URL
+                elif url.lower().endswith(".pdf") or "pdf" in url.lower():
+                    tmp_path = tempfile.mktemp(suffix=".pdf")
+                    resp = requests.get(url, stream=True, timeout=300)
+                    resp.raise_for_status()
+                    with open(tmp_path, "wb") as f:
+                        for chunk in resp.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                    # Try to get filename from URL
+                    url_filename = url.split("/")[-1].split("?")[0]
+                    if url_filename.endswith(".pdf"):
+                        filename = url_filename
+                else:
+                    st.error("URL không hợp lệ. Hỗ trợ: Google Drive link hoặc link trực tiếp .pdf")
+                    st.stop()
+
+                if tmp_path and os.path.isfile(tmp_path):
+                    file_size_mb = os.path.getsize(tmp_path) / (1024 * 1024)
+                    status_text.text(f"Đã tải {file_size_mb:.1f}MB. Đang xử lý...")
                     count = ingest_pdf(
-                        resolved, filename,
+                        tmp_path, filename,
                         progress_callback=lambda s, c, t: on_progress(s, c, t, progress_bar, status_text),
                         gemini_key=all_keys.get("gemini", ""),
                     )
                     progress_bar.progress(1.0)
                     status_text.empty()
                     st.success(f"Đã lưu: {filename} ({count} chunks, {file_size_mb:.1f}MB)")
-                except Exception as e:
-                    progress_bar.empty()
-                    status_text.empty()
-                    st.error(f"Lỗi: {e}")
+            except Exception as e:
+                progress_bar.empty()
+                status_text.empty()
+                st.error(f"Lỗi: {e}")
+            finally:
+                if tmp_path and os.path.isfile(tmp_path):
+                    os.unlink(tmp_path)
 
     st.divider()
     docs = get_documents()
