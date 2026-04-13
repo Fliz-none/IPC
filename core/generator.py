@@ -48,7 +48,11 @@ COHERE_CONFIG = {
 }
 
 QUOTA_ERROR_CODES = {429, 503}
-QUOTA_ERROR_PHRASES = ["quota", "rate_limit", "rate limit", "exceeded", "overloaded", "resource_exhausted"]
+QUOTA_ERROR_PHRASES = [
+    "quota", "rate_limit", "rate limit", "exceeded", "overloaded",
+    "resource_exhausted", "unavailable", "high demand", "503", "429",
+    "too many requests", "temporarily", "try again later",
+]
 
 
 def _is_quota_error(e: Exception) -> bool:
