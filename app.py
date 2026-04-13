@@ -11,7 +11,6 @@ from core.vectorstore import (
     get_chat_messages,
     save_chat_message,
     delete_chat_session,
-    save_api_key,
     get_api_key,
 )
 
@@ -28,13 +27,11 @@ def _has_answer(text: str) -> bool:
 
 
 def _load_all_keys() -> dict:
-    """Load all saved API keys from DB."""
     keys = {}
     for p in PROVIDERS:
         key = get_api_key(p["name"])
         if key:
             keys[p["name"]] = key
-    # Cohere is not an LLM provider but used for reranking
     cohere_key = get_api_key("cohere")
     if cohere_key:
         keys["cohere"] = cohere_key
@@ -52,61 +49,26 @@ if "messages" not in st.session_state:
 if "current_session_id" not in st.session_state:
     st.session_state.current_session_id = None
 
+all_keys = _load_all_keys()
+active_count = len([k for k in all_keys if k != "cohere"])
+
 # --- Sidebar ---
 with st.sidebar:
-    # API Keys
-    st.header("API Keys")
-    st.caption("Thêm nhiều key = auto-fallback khi hết quota")
+    # Provider & Model
+    st.header("LLM")
 
-    for p in PROVIDERS:
-        saved = get_api_key(p["name"])
-        key_input = st.text_input(
-            f"{p['name'].upper()}",
-            type="password",
-            value=saved,
-            help=f"Lấy key tại: {p['key_help']}",
-            key=f"key_{p['name']}",
-        )
-        if key_input and key_input != saved:
-            if key_input.startswith(p["key_prefix"]) and len(key_input) > 20:
-                save_api_key(p["name"], key_input)
-                st.success(f"{p['name']} key đã lưu!")
-            else:
-                st.error(f"Key phải bắt đầu bằng {p['key_prefix']}...")
-
-    # Cohere Rerank key (optional, improves accuracy)
-    saved_cohere = get_api_key("cohere")
-    cohere_input = st.text_input(
-        "COHERE (Rerank)",
-        type="password",
-        value=saved_cohere,
-        help="Tăng độ chính xác. Lấy tại: https://dashboard.cohere.com/api-keys",
-        key="key_cohere",
-    )
-    if cohere_input and cohere_input != saved_cohere:
-        if len(cohere_input) > 20:
-            save_api_key("cohere", cohere_input)
-            st.success("Cohere key đã lưu!")
-
-    all_keys = _load_all_keys()
-    active_count = len([k for k in all_keys if k != "cohere"])
     if active_count == 0:
-        st.warning("Cần ít nhất 1 API key")
+        st.warning("Chưa có API key. Vào trang **Settings** để thêm.")
     else:
-        st.success(f"{active_count} provider(s) sẵn sàng - auto-fallback")
+        preferred = st.selectbox(
+            "Provider",
+            [p["name"] for p in PROVIDERS if get_api_key(p["name"])],
+        )
+        prov_config = next((p for p in PROVIDERS if p["name"] == preferred), PROVIDERS[0])
+        model = st.selectbox("Model", prov_config["models"])
 
-    st.divider()
-
-    # Provider preference
-    preferred = st.selectbox(
-        "Provider ưu tiên",
-        [p["name"] for p in PROVIDERS if get_api_key(p["name"])],
-        index=0 if active_count > 0 else None,
-    ) if active_count > 0 else "gemini"
-
-    # Model selection based on preferred provider
-    prov_config = next((p for p in PROVIDERS if p["name"] == preferred), PROVIDERS[0])
-    model = st.selectbox("Model", prov_config["models"])
+        has_cohere = "cohere" in all_keys
+        st.caption(f"{active_count} provider(s) | Rerank: {'ON' if has_cohere else 'OFF'}")
 
     st.divider()
 
@@ -141,7 +103,7 @@ with st.sidebar:
     st.divider()
 
     # Document management
-    st.header("Quản lý Tài liệu")
+    st.header("Tài liệu")
 
     upload_mode = st.radio("Nguồn file", ["Upload", "Đường dẫn local"], horizontal=True)
 
@@ -223,7 +185,6 @@ with st.sidebar:
                     st.error(f"Lỗi: {e}")
 
     st.divider()
-    st.subheader("Tài liệu đã lưu")
     docs = get_documents()
     if not docs:
         st.info("Chưa có tài liệu nào.")
@@ -238,10 +199,10 @@ with st.sidebar:
 st.title("IPC - Hỏi đáp Tài liệu Học tập")
 
 if active_count == 0:
-    st.warning("Nhập ít nhất 1 API key ở sidebar để bắt đầu hỏi đáp.")
+    st.warning("Vào trang **Settings** ở menu bên trái để thêm API key.")
 
 if not get_documents():
-    st.info("Hãy tải lên ít nhất một tài liệu PDF ở sidebar để bắt đầu.")
+    st.info("Tải lên ít nhất một tài liệu PDF ở sidebar để bắt đầu.")
 
 # Display chat history
 for msg in st.session_state.messages:
@@ -252,7 +213,7 @@ for msg in st.session_state.messages:
                 for src in msg["sources"]:
                     page = src["metadata"].get("page_number", "?")
                     source_file = src["metadata"].get("source_file", "?")
-                    st.caption(f"📄 Trang {page} - {source_file}")
+                    st.caption(f"Trang {page} - {source_file}")
                     text = src.get("parent_text", src["document"])
                     st.text(text[:500] + "..." if len(text) > 500 else text)
                     st.divider()
@@ -260,7 +221,7 @@ for msg in st.session_state.messages:
 # Chat input
 if prompt := st.chat_input("Đặt câu hỏi về tài liệu..."):
     if active_count == 0:
-        st.error("Vui lòng nhập ít nhất 1 API key ở sidebar.")
+        st.error("Vui lòng thêm API key trong trang Settings.")
         st.stop()
 
     if st.session_state.current_session_id is None:
@@ -280,8 +241,8 @@ if prompt := st.chat_input("Đặt câu hỏi về tài liệu..."):
             stream, sources = ask_stream(
                 prompt,
                 keys=all_keys,
-                preferred_provider=preferred,
-                model=model,
+                preferred_provider=preferred if active_count > 0 else "gemini",
+                model=model if active_count > 0 else "",
             )
             response = st.write_stream(stream)
         except Exception as e:
@@ -303,7 +264,7 @@ if prompt := st.chat_input("Đặt câu hỏi về tài liệu..."):
             for src in sources:
                 page = src["metadata"].get("page_number", "?")
                 source_file = src["metadata"].get("source_file", "?")
-                st.caption(f"📄 Trang {page} - {source_file}")
+                st.caption(f"Trang {page} - {source_file}")
                 text = src.get("parent_text", src["document"])
                 st.text(text[:500] + "..." if len(text) > 500 else text)
                 st.divider()
