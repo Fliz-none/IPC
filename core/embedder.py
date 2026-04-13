@@ -1,40 +1,58 @@
-from sentence_transformers import SentenceTransformer
+"""Embedding via Gemini Embedding API. Zero local RAM."""
 
-from config import EMBEDDING_MODEL
+from google import genai
 
-_model = None
+from config import GEMINI_API_KEY, EMBEDDING_MODEL, DENSE_VECTOR_SIZE
 
-EMBED_BATCH_SIZE = 64
+_client = None
 
-
-def _get_model() -> SentenceTransformer:
-    global _model
-    if _model is None:
-        _model = SentenceTransformer(EMBEDDING_MODEL)
-    return _model
+EMBED_BATCH_SIZE = 100
 
 
-def embed_documents(texts: list[str]) -> dict:
-    """Embed document passages in batches to handle large files."""
-    model = _get_model()
-    embeddings = model.encode(
-        texts,
-        normalize_embeddings=True,
-        batch_size=EMBED_BATCH_SIZE,
-        show_progress_bar=False,
+def _get_client(api_key: str = "") -> genai.Client:
+    global _client
+    key = api_key or GEMINI_API_KEY
+    if _client is None and key:
+        _client = genai.Client(api_key=key)
+    return _client
+
+
+def embed_documents(texts: list[str], api_key: str = "") -> dict:
+    """Embed document passages via Gemini API in batches."""
+    client = _get_client(api_key)
+    all_embeddings = []
+
+    for i in range(0, len(texts), EMBED_BATCH_SIZE):
+        batch = texts[i:i + EMBED_BATCH_SIZE]
+        response = client.models.embed_content(
+            model=EMBEDDING_MODEL,
+            contents=batch,
+            config=genai.types.EmbedContentConfig(
+                task_type="RETRIEVAL_DOCUMENT",
+                output_dimensionality=DENSE_VECTOR_SIZE,
+            ),
+        )
+        for emb in response.embeddings:
+            all_embeddings.append(emb.values)
+
+    return {"dense": all_embeddings}
+
+
+def embed_batch(texts: list[str], api_key: str = "") -> list[list[float]]:
+    """Embed a single batch. Returns list of vectors."""
+    result = embed_documents(texts, api_key)
+    return result["dense"]
+
+
+def embed_query(query: str, api_key: str = "") -> dict:
+    """Embed a search query via Gemini API."""
+    client = _get_client(api_key)
+    response = client.models.embed_content(
+        model=EMBEDDING_MODEL,
+        contents=query,
+        config=genai.types.EmbedContentConfig(
+            task_type="RETRIEVAL_QUERY",
+            output_dimensionality=DENSE_VECTOR_SIZE,
+        ),
     )
-    return {"dense": embeddings.tolist()}
-
-
-def embed_batch(texts: list[str]) -> list[list[float]]:
-    """Embed a single batch of texts. Returns list of vectors."""
-    model = _get_model()
-    embeddings = model.encode(texts, normalize_embeddings=True)
-    return embeddings.tolist()
-
-
-def embed_query(query: str) -> dict:
-    """Embed a search query using BGE-M3."""
-    model = _get_model()
-    embedding = model.encode(query, normalize_embeddings=True)
-    return {"dense": embedding.tolist()}
+    return {"dense": response.embeddings[0].values}

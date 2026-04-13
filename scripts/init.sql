@@ -1,4 +1,9 @@
--- Enable extensions
+-- ===========================================
+-- Chạy SQL này trong Supabase SQL Editor
+-- (Dashboard > SQL Editor > New Query > Paste > Run)
+-- ===========================================
+
+-- Bật extensions (Supabase hỗ trợ sẵn, chỉ cần enable)
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS unaccent;
 
@@ -27,7 +32,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     page_number INTEGER NOT NULL,
     child_text TEXT NOT NULL,
     parent_text TEXT NOT NULL,
-    embedding vector(1024),
+    embedding vector(768),
     ts_content tsvector,
     created_at TIMESTAMP DEFAULT NOW()
 );

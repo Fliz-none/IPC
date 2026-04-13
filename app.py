@@ -4,12 +4,12 @@ import tempfile
 import streamlit as st
 
 from core.pipeline import ingest_pdf, ask_stream, get_documents, remove_document
+from core.generator import PROVIDERS
 from core.vectorstore import (
     create_chat_session,
     list_chat_sessions,
     get_chat_messages,
     save_chat_message,
-    update_session_title,
     delete_chat_session,
     save_api_key,
     get_api_key,
@@ -27,13 +27,26 @@ def _has_answer(text: str) -> bool:
     return not any(phrase in text_lower for phrase in NO_INFO_PHRASES)
 
 
+def _load_all_keys() -> dict:
+    """Load all saved API keys from DB."""
+    keys = {}
+    for p in PROVIDERS:
+        key = get_api_key(p["name"])
+        if key:
+            keys[p["name"]] = key
+    # Cohere is not an LLM provider but used for reranking
+    cohere_key = get_api_key("cohere")
+    if cohere_key:
+        keys["cohere"] = cohere_key
+    return keys
+
+
 st.set_page_config(
     page_title="IPC - Hỏi đáp Tài liệu",
     page_icon="📚",
     layout="wide",
 )
 
-# --- Session state init ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "current_session_id" not in st.session_state:
@@ -41,35 +54,59 @@ if "current_session_id" not in st.session_state:
 
 # --- Sidebar ---
 with st.sidebar:
-    # Gemini Settings
-    st.header("Cài đặt Gemini")
+    # API Keys
+    st.header("API Keys")
+    st.caption("Thêm nhiều key = auto-fallback khi hết quota")
 
-    saved_key = get_api_key("gemini")
-    api_key = st.text_input(
-        "API Key",
+    for p in PROVIDERS:
+        saved = get_api_key(p["name"])
+        key_input = st.text_input(
+            f"{p['name'].upper()}",
+            type="password",
+            value=saved,
+            help=f"Lấy key tại: {p['key_help']}",
+            key=f"key_{p['name']}",
+        )
+        if key_input and key_input != saved:
+            if key_input.startswith(p["key_prefix"]) and len(key_input) > 20:
+                save_api_key(p["name"], key_input)
+                st.success(f"{p['name']} key đã lưu!")
+            else:
+                st.error(f"Key phải bắt đầu bằng {p['key_prefix']}...")
+
+    # Cohere Rerank key (optional, improves accuracy)
+    saved_cohere = get_api_key("cohere")
+    cohere_input = st.text_input(
+        "COHERE (Rerank)",
         type="password",
-        value=saved_key,
-        help="Lấy key miễn phí tại: https://aistudio.google.com/apikey",
+        value=saved_cohere,
+        help="Tăng độ chính xác. Lấy tại: https://dashboard.cohere.com/api-keys",
+        key="key_cohere",
     )
-    if api_key and api_key != saved_key:
-        try:
-            from google import genai
-            test_client = genai.Client(api_key=api_key)
-            test_client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents="hi",
-                config=genai.types.GenerateContentConfig(max_output_tokens=5),
-            )
-            save_api_key("gemini", api_key)
-            st.success("Key hợp lệ, đã lưu!")
-        except Exception as e:
-            st.error(f"Key không hợp lệ: {e}")
-            api_key = saved_key
-    model = st.selectbox(
-        "Model",
-        ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash",
-         "gemini-1.5-flash", "gemini-1.5-pro"],
-    )
+    if cohere_input and cohere_input != saved_cohere:
+        if len(cohere_input) > 20:
+            save_api_key("cohere", cohere_input)
+            st.success("Cohere key đã lưu!")
+
+    all_keys = _load_all_keys()
+    active_count = len([k for k in all_keys if k != "cohere"])
+    if active_count == 0:
+        st.warning("Cần ít nhất 1 API key")
+    else:
+        st.success(f"{active_count} provider(s) sẵn sàng - auto-fallback")
+
+    st.divider()
+
+    # Provider preference
+    preferred = st.selectbox(
+        "Provider ưu tiên",
+        [p["name"] for p in PROVIDERS if get_api_key(p["name"])],
+        index=0 if active_count > 0 else None,
+    ) if active_count > 0 else "gemini"
+
+    # Model selection based on preferred provider
+    prov_config = next((p for p in PROVIDERS if p["name"] == preferred), PROVIDERS[0])
+    model = st.selectbox("Model", prov_config["models"])
 
     st.divider()
 
@@ -84,7 +121,7 @@ with st.sidebar:
     sessions = list_chat_sessions()
     for sess in sessions:
         col1, col2 = st.columns([4, 1])
-        label = f"{sess['title'][:30]}"
+        label = sess['title'][:30]
         is_active = st.session_state.current_session_id == sess["id"]
         if col1.button(
             f"{'> ' if is_active else ''}{label}",
@@ -139,6 +176,7 @@ with st.sidebar:
                 count = ingest_pdf(
                     tmp_path, uploaded_file.name,
                     progress_callback=lambda s, c, t: on_progress(s, c, t, progress_bar, status_text),
+                    gemini_key=all_keys.get("gemini", ""),
                 )
                 progress_bar.progress(1.0)
                 status_text.empty()
@@ -155,11 +193,8 @@ with st.sidebar:
             placeholder=r"C:\Users\lucif\Downloads\document.pdf",
         )
         if local_path and st.button("Xử lý tài liệu"):
-            # Auto-convert Windows path to Docker mount path
-            # D:\folder\file.pdf -> /data/local/folder/file.pdf
             resolved = local_path.strip().strip('"').strip("'")
             if len(resolved) >= 2 and resolved[1] == ":":
-                # Windows absolute path: C:\... or D:\...
                 drive_letter = resolved[0].upper()
                 rest = resolved[2:].replace("\\", "/")
                 resolved = f"/data/local/{drive_letter}{rest}"
@@ -177,6 +212,7 @@ with st.sidebar:
                     count = ingest_pdf(
                         resolved, filename,
                         progress_callback=lambda s, c, t: on_progress(s, c, t, progress_bar, status_text),
+                        gemini_key=all_keys.get("gemini", ""),
                     )
                     progress_bar.progress(1.0)
                     status_text.empty()
@@ -198,17 +234,14 @@ with st.sidebar:
             remove_document(doc["hash"])
             st.rerun()
 
-    st.divider()
-    st.caption(f"Gemini | {model}")
-
 # --- Main chat area ---
 st.title("IPC - Hỏi đáp Tài liệu Học tập")
 
-if not api_key:
-    st.warning("Nhập API Key ở sidebar để bắt đầu hỏi đáp.")
+if active_count == 0:
+    st.warning("Nhập ít nhất 1 API key ở sidebar để bắt đầu hỏi đáp.")
 
 if not get_documents():
-    st.info("Hãy tải lên ít nhất một tài liệu PDF ở thanh bên trái để bắt đầu.")
+    st.info("Hãy tải lên ít nhất một tài liệu PDF ở sidebar để bắt đầu.")
 
 # Display chat history
 for msg in st.session_state.messages:
@@ -226,11 +259,10 @@ for msg in st.session_state.messages:
 
 # Chat input
 if prompt := st.chat_input("Đặt câu hỏi về tài liệu..."):
-    if not api_key:
-        st.error("Vui lòng nhập API Key ở sidebar.")
+    if active_count == 0:
+        st.error("Vui lòng nhập ít nhất 1 API key ở sidebar.")
         st.stop()
 
-    # Auto-create session on first message
     if st.session_state.current_session_id is None:
         title = prompt[:50] + ("..." if len(prompt) > 50 else "")
         session_id = create_chat_session(title)
@@ -238,17 +270,18 @@ if prompt := st.chat_input("Đặt câu hỏi về tài liệu..."):
     else:
         session_id = st.session_state.current_session_id
 
-    # Save & show user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     save_chat_message(session_id, "user", prompt)
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Generate & save assistant response
     with st.chat_message("assistant"):
         try:
             stream, sources = ask_stream(
-                prompt, model=model, api_key=api_key
+                prompt,
+                keys=all_keys,
+                preferred_provider=preferred,
+                model=model,
             )
             response = st.write_stream(stream)
         except Exception as e:
@@ -256,7 +289,6 @@ if prompt := st.chat_input("Đặt câu hỏi về tài liệu..."):
             st.error(response)
             sources = []
 
-    # Save to DB
     save_sources = sources if _has_answer(response) else None
     save_chat_message(session_id, "assistant", response, save_sources)
 

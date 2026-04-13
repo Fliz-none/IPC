@@ -1,10 +1,11 @@
 import hashlib
+import json
 
 import psycopg2
 from psycopg2.extras import execute_values
 from pgvector.psycopg2 import register_vector
 
-from config import DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
+from config import DATABASE_URL
 
 _conn = None
 
@@ -12,13 +13,7 @@ _conn = None
 def _get_conn():
     global _conn
     if _conn is None or _conn.closed:
-        _conn = psycopg2.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASSWORD,
-        )
+        _conn = psycopg2.connect(DATABASE_URL)
         _conn.autocommit = True
         register_vector(_conn)
     return _conn
@@ -28,8 +23,9 @@ def _file_hash(filename: str) -> str:
     return hashlib.md5(filename.encode()).hexdigest()[:16]
 
 
+# --- Documents ---
+
 def create_document(source_file: str, chunk_count: int) -> int:
-    """Create or update document record. Returns doc_id."""
     conn = _get_conn()
     fhash = _file_hash(source_file)
     with conn.cursor() as cur:
@@ -57,7 +53,6 @@ def insert_chunks_batch(
     metadatas: list[dict],
     parent_texts: list[str],
 ):
-    """Insert a batch of chunks into DB."""
     conn = _get_conn()
     rows = []
     for chunk, emb, meta, parent in zip(chunks, embeddings, metadatas, parent_texts):
@@ -90,7 +85,6 @@ def add_document(
     metadatas: list[dict],
     parent_texts: list[str],
 ) -> int:
-    """Store all chunks at once (for small files)."""
     doc_id = create_document(source_file, len(chunks))
     insert_chunks_batch(doc_id, chunks, embeddings, metadatas, parent_texts)
     return len(chunks)
@@ -102,20 +96,12 @@ def hybrid_search(
     top_k: int,
     source_filter: str | None = None,
 ) -> list[dict]:
-    """Hybrid search: vector cosine + full-text tsvector with RRF fusion.
-
-    Both searches run in a single SQL query using CTEs.
-    Pre-filtered by document if source_filter is provided.
-    """
     conn = _get_conn()
 
     filter_clause = ""
-    params = [dense_embedding, top_k, query_text, top_k, top_k]
     if source_filter:
         filter_clause = "AND c.document_id IN (SELECT id FROM documents WHERE filename = %s)"
-        params = [dense_embedding, source_filter, top_k, query_text, source_filter, top_k, top_k]
 
-    # RRF fusion: 1/(k+rank) for each method, k=60
     sql = f"""
     WITH vector_search AS (
         SELECT c.id, c.child_text, c.parent_text, c.page_number, c.chunk_index,
@@ -123,7 +109,7 @@ def hybrid_search(
                ROW_NUMBER() OVER (ORDER BY c.embedding <=> %s::vector) AS rank
         FROM chunks c
         JOIN documents d ON c.document_id = d.id
-        WHERE 1=1 {filter_clause.replace('c.document_id', 'c.document_id') if source_filter else ''}
+        WHERE 1=1 {filter_clause if source_filter else ''}
         LIMIT %s
     ),
     text_search AS (
@@ -157,7 +143,6 @@ def hybrid_search(
     LIMIT %s
     """
 
-    # Build params based on filter
     if source_filter:
         params = [
             dense_embedding, source_filter, top_k,
@@ -175,23 +160,22 @@ def hybrid_search(
         cur.execute(sql, params)
         rows = cur.fetchall()
 
-    results = []
-    for row in rows:
-        results.append({
-            "document": row[0],
-            "parent_text": row[1],
+    return [
+        {
+            "document": r[0],
+            "parent_text": r[1],
             "metadata": {
-                "page_number": row[2],
-                "chunk_index": row[3],
-                "source_file": row[4],
+                "page_number": r[2],
+                "chunk_index": r[3],
+                "source_file": r[4],
             },
-            "score": float(row[5]),
-        })
-    return results
+            "score": float(r[5]),
+        }
+        for r in rows
+    ]
 
 
 def list_documents() -> list[dict]:
-    """List all stored documents."""
     conn = _get_conn()
     with conn.cursor() as cur:
         cur.execute(
@@ -205,7 +189,6 @@ def list_documents() -> list[dict]:
 
 
 def delete_document(file_hash: str):
-    """Delete a document and its chunks (cascade)."""
     conn = _get_conn()
     with conn.cursor() as cur:
         cur.execute("DELETE FROM documents WHERE file_hash = %s", (file_hash,))
@@ -249,7 +232,6 @@ def get_chat_messages(session_id: int) -> list[dict]:
 
 def save_chat_message(session_id: int, role: str, content: str, sources=None):
     conn = _get_conn()
-    import json
     sources_json = json.dumps(sources) if sources else None
     with conn.cursor() as cur:
         cur.execute(

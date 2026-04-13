@@ -11,12 +11,7 @@ from core.generator import generate_answer_stream
 INGEST_BATCH_SIZE = 64
 
 
-def ingest_pdf(pdf_path: str, filename: str, progress_callback=None) -> int:
-    """Batch ingestion pipeline for large files.
-
-    progress_callback(stage, current, total) is called to report progress.
-    Stages: "extract", "chunk", "embed", "store", "done"
-    """
+def ingest_pdf(pdf_path: str, filename: str, progress_callback=None, gemini_key: str = "") -> int:
     if progress_callback:
         progress_callback("extract", 0, 1)
 
@@ -34,10 +29,8 @@ def ingest_pdf(pdf_path: str, filename: str, progress_callback=None) -> int:
     if progress_callback:
         progress_callback("chunk", 1, 1)
 
-    # Create document record
     doc_id = create_document(filename, total_chunks)
 
-    # Process in batches: embed + insert
     for start in range(0, total_chunks, INGEST_BATCH_SIZE):
         end = min(start + INGEST_BATCH_SIZE, total_chunks)
         batch = chunks[start:end]
@@ -46,10 +39,7 @@ def ingest_pdf(pdf_path: str, filename: str, progress_callback=None) -> int:
         batch_parents = [c["parent_text"] for c in batch]
         batch_metas = [c["metadata"] for c in batch]
 
-        # Embed batch
-        batch_embeddings = embed_batch(batch_texts)
-
-        # Insert batch into DB
+        batch_embeddings = embed_batch(batch_texts, api_key=gemini_key)
         insert_chunks_batch(doc_id, batch_texts, batch_embeddings, batch_metas, batch_parents)
 
         if progress_callback:
@@ -61,14 +51,25 @@ def ingest_pdf(pdf_path: str, filename: str, progress_callback=None) -> int:
     return total_chunks
 
 
-def ask_stream(query: str, model: str = "", api_key: str = ""):
-    """Streaming Q&A pipeline."""
-    chunks = retrieve(query)
+def ask_stream(
+    query: str,
+    keys: dict = None,
+    preferred_provider: str = "gemini",
+    model: str = "",
+):
+    """Streaming Q&A with auto-fallback."""
+    keys = keys or {}
+    gemini_key = keys.get("gemini", "")
+    cohere_key = keys.get("cohere", "")
+
+    chunks = retrieve(query, gemini_key=gemini_key, cohere_key=cohere_key)
     if not chunks:
         def empty():
             yield "Không tìm thấy thông tin liên quan trong tài liệu."
         return empty(), []
-    stream = generate_answer_stream(query, chunks, model=model, api_key=api_key)
+    stream = generate_answer_stream(
+        query, chunks, keys=keys, preferred_provider=preferred_provider, model=model
+    )
     return stream, chunks
 
 
