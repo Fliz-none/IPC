@@ -47,6 +47,7 @@ def _file_hash(filename: str) -> str:
 # --- Documents ---
 
 def create_document(source_file: str, chunk_count: int) -> int:
+    """Create document, delete old chunks for fresh ingest."""
     conn = _get_conn()
     fhash = _file_hash(source_file)
     with conn.cursor() as cur:
@@ -65,6 +66,41 @@ def create_document(source_file: str, chunk_count: int) -> int:
         doc_id = cur.fetchone()[0]
         cur.execute("DELETE FROM chunks WHERE document_id = %s", (doc_id,))
     return doc_id
+
+
+def get_or_create_document(source_file: str, chunk_count: int) -> tuple[int, int]:
+    """Get existing document or create new. Returns (doc_id, existing_chunk_count).
+
+    Does NOT delete existing chunks - used for resume.
+    """
+    conn = _get_conn()
+    fhash = _file_hash(source_file)
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM documents WHERE file_hash = %s", (fhash,)
+        )
+        row = cur.fetchone()
+        if row:
+            doc_id = row[0]
+            cur.execute(
+                "SELECT COUNT(*) FROM chunks WHERE document_id = %s", (doc_id,)
+            )
+            existing = cur.fetchone()[0]
+            # Update chunk_count
+            cur.execute(
+                "UPDATE documents SET chunk_count = %s WHERE id = %s",
+                (chunk_count, doc_id),
+            )
+            return doc_id, existing
+        else:
+            cur.execute(
+                """
+                INSERT INTO documents (filename, file_hash, chunk_count)
+                VALUES (%s, %s, %s) RETURNING id
+                """,
+                (source_file, fhash, chunk_count),
+            )
+            return cur.fetchone()[0], 0
 
 
 def insert_chunks_batch(

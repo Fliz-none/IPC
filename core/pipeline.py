@@ -2,7 +2,7 @@ from core.pdf_extract import extract_text_from_pdf
 from core.chunker import chunk_pages
 from core.embedder import embed_batch
 from core.vectorstore import (
-    create_document, insert_chunks_batch,
+    create_document, get_or_create_document, insert_chunks_batch,
     list_documents, delete_document,
 )
 from core.retriever import retrieve
@@ -12,6 +12,7 @@ INGEST_BATCH_SIZE = 64
 
 
 def ingest_pdf(pdf_path: str, filename: str, progress_callback=None, cohere_key: str = "") -> int:
+    """Ingest with resume support. If file was partially ingested, continues from where it stopped."""
     if progress_callback:
         progress_callback("extract", 0, 1)
 
@@ -29,9 +30,21 @@ def ingest_pdf(pdf_path: str, filename: str, progress_callback=None, cohere_key:
     if progress_callback:
         progress_callback("chunk", 1, 1)
 
-    doc_id = create_document(filename, total_chunks)
+    # Check if document exists and has partial data
+    doc_id, existing_count = get_or_create_document(filename, total_chunks)
 
-    for start in range(0, total_chunks, INGEST_BATCH_SIZE):
+    if existing_count >= total_chunks:
+        # Already fully ingested
+        if progress_callback:
+            progress_callback("done", total_chunks, total_chunks)
+        return total_chunks
+
+    # Skip already ingested chunks
+    start_from = existing_count
+    if progress_callback and start_from > 0:
+        progress_callback("embed", start_from, total_chunks)
+
+    for start in range(start_from, total_chunks, INGEST_BATCH_SIZE):
         end = min(start + INGEST_BATCH_SIZE, total_chunks)
         batch = chunks[start:end]
 
